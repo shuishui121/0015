@@ -1,7 +1,8 @@
 import React, { useMemo, useRef, useEffect } from 'react';
-import { Check, X, ArrowRight } from 'lucide-react';
+import { Check, X, ArrowRight, Shuffle } from 'lucide-react';
 import type { BeatPoint, DetectionResult } from '@/types';
 import { useTrainingStore } from '@/store/trainingStore';
+import { BAN_STYLES } from '@/data/arias';
 import { getAccuracyColor, formatDeviation, PERFECT_THRESHOLD, GOOD_THRESHOLD, POOR_THRESHOLD } from '@/hooks/useBeatMatcher';
 
 interface BeatTimelineProps {
@@ -18,12 +19,21 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
   height = 220,
 }) => {
   const {
-    selectedAria,
     currentTime,
     windowStart,
     detectionResults,
     lastDetectedBeat,
+    isSequenceMode,
+    currentSequence,
+    transitionPoints,
+    getActiveBeats,
+    getActiveDuration,
+    getActiveTitle,
   } = useTrainingStore();
+
+  const beats = getActiveBeats();
+  const duration = getActiveDuration();
+  const title = getActiveTitle();
 
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -32,9 +42,16 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
     return (relativeTime / VISIBLE_WINDOW_MS) * width;
   };
 
-  const visibleBeats = selectedAria?.beats.filter(b => 
+  const visibleBeats = beats.filter(b => 
     b.time >= windowStart - 1000 && b.time <= windowStart + VISIBLE_WINDOW_MS + 1000
   ) || [];
+
+  const visibleTransitions = useMemo(() => {
+    if (!isSequenceMode) return [];
+    return transitionPoints.filter(tp =>
+      tp.time >= windowStart - 1000 && tp.time <= windowStart + VISIBLE_WINDOW_MS + 1000
+    );
+  }, [transitionPoints, windowStart, isSequenceMode]);
 
   const recentResults = useMemo(() => {
     return detectionResults.filter(r => 
@@ -53,6 +70,61 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
   }, [detectionResults]);
 
   const currentLineX = timeToX(currentTime);
+
+  const renderTransitionMarkers = () => {
+    if (!isSequenceMode || visibleTransitions.length === 0) return null;
+
+    return visibleTransitions.map((tp, i) => {
+      const x = timeToX(tp.time);
+      const toStyle = BAN_STYLES[tp.toStyle];
+      const fromStyle = BAN_STYLES[tp.fromStyle];
+
+      return (
+        <g key={i}>
+          <line
+            x1={x}
+            y1={0}
+            x2={x}
+            y2={height}
+            stroke="#a78bfa"
+            strokeWidth="2"
+            strokeDasharray="8,4"
+            opacity="0.6"
+          />
+          
+          <rect
+            x={x - 60}
+            y={8}
+            width={120}
+            height={28}
+            rx={6}
+            fill="rgba(139, 92, 246, 0.2)"
+            stroke="#a78bfa"
+            strokeWidth="1"
+          />
+          
+          <text
+            x={x}
+            y={22}
+            textAnchor="middle"
+            fill="#c4b5fd"
+            fontSize="10"
+            fontWeight="600"
+          >
+            {fromStyle.name}→{toStyle.name}
+          </text>
+
+          <circle
+            cx={x}
+            cy={height / 2}
+            r={6}
+            fill="#a78bfa"
+            style={{ filter: 'drop-shadow(0 0 8px rgba(167, 139, 250, 0.8))' }}
+          />
+        </g>
+      );
+    });
+  };
 
   const renderBeatPoint = (beat: BeatPoint) => {
     const x = timeToX(beat.time);
@@ -354,19 +426,19 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
     return markers;
   };
 
-  if (!selectedAria) {
+  if (beats.length === 0) {
     return (
       <div
         ref={containerRef}
         className="relative z-0 bg-gradient-to-b from-slate-900 to-slate-800 rounded-2xl flex items-center justify-center"
         style={{ width, height }}
       >
-        <p className="text-slate-400 text-lg">请选择一个唱段开始练习</p>
+        <p className="text-slate-400 text-lg">请选择一个唱段或板式序列开始练习</p>
       </div>
     );
   }
 
-  const progress = (currentTime / selectedAria.totalDuration) * 100;
+  const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
     <div
@@ -376,7 +448,7 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
     >
       <div className="absolute top-3 left-4 flex items-center gap-4">
         <span className="text-slate-400 text-xs">
-          {(currentTime / 1000).toFixed(1)}s / {(selectedAria.totalDuration / 1000).toFixed(1)}s
+          {(currentTime / 1000).toFixed(1)}s / {(duration / 1000).toFixed(1)}s
         </span>
         <div className="flex-1 max-w-32 h-1.5 bg-slate-700 rounded-full overflow-hidden">
           <div
@@ -384,6 +456,12 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
             style={{ width: `${Math.min(100, progress)}%` }}
           />
         </div>
+        {isSequenceMode && currentSequence && (
+          <div className="flex items-center gap-1 px-2 py-0.5 bg-violet-500/20 rounded-lg">
+            <Shuffle size={12} className="text-violet-400" />
+            <span className="text-violet-300 text-xs">序列模式</span>
+          </div>
+        )}
       </div>
 
       <div className="absolute top-3 right-4 flex items-center gap-2">
@@ -395,6 +473,12 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
           <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
           <span className="text-slate-400 text-xs">眼</span>
         </div>
+        {isSequenceMode && (
+          <div className="flex items-center gap-1 ml-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-violet-500" />
+            <span className="text-slate-400 text-xs">过渡</span>
+          </div>
+        )}
       </div>
 
       <svg width={width} height={height} className="absolute inset-0">
@@ -409,6 +493,8 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
         />
 
         {renderTimeMarkers()}
+
+        {renderTransitionMarkers()}
 
         {renderThresholdMarkers()}
 

@@ -12,6 +12,57 @@ export type BanStyle =
   | 'daoban'
   | 'kuaiyuanban';
 
+export type TransitionStyle = 'gradual' | 'abrupt' | 'natural';
+
+export interface SequenceSegment {
+  id: string;
+  ariaId: string;
+  startTime: number;
+  endTime: number;
+  transitionStyle: TransitionStyle;
+  transitionDuration: number;
+}
+
+export interface AriaSequence {
+  id: string;
+  title: string;
+  description?: string;
+  segments: SequenceSegment[];
+  difficulty: 'basic' | 'intermediate' | 'advanced';
+  createdAt?: number;
+}
+
+export interface TransitionPoint {
+  time: number;
+  fromStyle: BanStyle;
+  toStyle: BanStyle;
+  fromSegmentId: string;
+  toSegmentId: string;
+  transitionStyle: TransitionStyle;
+  transitionDuration: number;
+}
+
+export interface TransitionAnalysis {
+  time: number;
+  fromStyle: BanStyle;
+  toStyle: BanStyle;
+  speedChangeRate: number;
+  stabilityBefore: number;
+  stabilityAfter: number;
+  stabilityChange: number;
+  smoothness: number;
+  speedControl: number;
+  beatAccuracy: number;
+  totalScore: number;
+}
+
+export interface SequenceSessionStats extends SessionStats {
+  sequenceId: string;
+  sequenceTitle: string;
+  transitions: TransitionAnalysis[];
+  transitionAverageScore: number;
+}
+
 export interface BeatPoint {
   time: number;
   type: BeatType;

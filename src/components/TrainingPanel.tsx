@@ -15,15 +15,20 @@ import {
   Target,
   Gauge,
   ChevronDown,
+  Shuffle,
+  Plus,
+  Edit3,
 } from 'lucide-react';
 import { useTrainingStore } from '@/store/trainingStore';
-import { BAN_STYLES, ARIAS, getStyleArias } from '@/data/arias';
+import { BAN_STYLES, ARIAS, getStyleArias, ARIA_SEQUENCES, getAriaById } from '@/data/arias';
 import { BeatTimeline } from '@/components/BeatTimeline';
 import { AssessmentReport } from '@/components/AssessmentReport';
+import { TransitionWarning } from '@/components/TransitionWarning';
+import { SequenceEditor } from '@/components/SequenceEditor';
 import { useMicrophone } from '@/hooks/useMicrophone';
 import { useBeatPlayer } from '@/hooks/useBeatPlayer';
 import { useBeatMatcher, PERFECT_THRESHOLD, GOOD_THRESHOLD, POOR_THRESHOLD } from '@/hooks/useBeatMatcher';
-import type { BanStyle, DetectionResult } from '@/types';
+import type { BanStyle, DetectionResult, AriaSequence, BeatPoint, Aria } from '@/types';
 import type { OnsetEvent } from '@/audio/OnsetDetector';
 
 export const TrainingPanel: React.FC = () => {
@@ -31,6 +36,8 @@ export const TrainingPanel: React.FC = () => {
     trainingState,
     selectedStyle,
     selectedAria,
+    isSequenceMode,
+    currentSequence,
     currentTime,
     detectionResults,
     sessionStats,
@@ -52,11 +59,20 @@ export const TrainingPanel: React.FC = () => {
     stopTraining,
     finishTraining,
     setCurrentTime,
+    loadSequence,
+    getActiveBeats,
+    getActiveDuration,
+    getActiveStyle,
+    getSegmentAtTime,
   } = useTrainingStore();
 
   const [showStyleDropdown, setShowStyleDropdown] = useState(false);
   const [showAriaDropdown, setShowAriaDropdown] = useState(false);
+  const [showSequenceDropdown, setShowSequenceDropdown] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showSequenceEditor, setShowSequenceEditor] = useState(false);
+  const [practiceMode, setPracticeMode] = useState<'single' | 'sequence'>('single');
+  const [customSequences, setCustomSequences] = useState<AriaSequence[]>([]);
   const [instantFeedback, setInstantFeedback] = useState<{
     show: boolean;
     type: 'perfect' | 'good' | 'poor' | 'missed';
@@ -67,24 +83,42 @@ export const TrainingPanel: React.FC = () => {
   const feedbackTimeoutRef = useRef<number | null>(null);
   const styleDropdownRef = useRef<HTMLDivElement>(null);
   const ariaDropdownRef = useRef<HTMLDivElement>(null);
+  const sequenceDropdownRef = useRef<HTMLDivElement>(null);
   const settingsContainerRef = useRef<HTMLDivElement>(null);
 
   const { matchBeat, checkMissedBeats, reset: resetMatcher } = useBeatMatcher();
   beatMatcherRef.current = { matchBeat, checkMissedBeats, reset: resetMatcher };
 
-  const handleOnset = useCallback((onset: OnsetEvent) => {
-    const aria = useTrainingStore.getState().selectedAria;
-    const trainingState = useTrainingStore.getState().trainingState;
-    
-    if (!aria || trainingState !== 'playing') return;
+  const allSequences = [...ARIA_SEQUENCES, ...customSequences];
 
-    const currentPlayTime = useTrainingStore.getState().currentTime;
+  const handleOnset = useCallback((onset: OnsetEvent) => {
+    const state = useTrainingStore.getState();
+    const trainingState = state.trainingState;
+    
+    if (trainingState !== 'playing') return;
+
+    const beats = state.getActiveBeats();
+    if (beats.length === 0) return;
+
+    const currentPlayTime = state.currentTime;
     const detectedTime = onset.time;
+
+    const fakeAria: Aria = {
+      id: 'virtual',
+      title: state.getActiveTitle(),
+      opera: '',
+      role: '',
+      style: state.getActiveStyle(),
+      totalDuration: state.getActiveDuration(),
+      beats: beats,
+      sections: [],
+      difficulty: 'basic',
+    };
     
     const matched = beatMatcherRef.current?.matchBeat(
       detectedTime,
       onset.strength,
-      aria,
+      fakeAria,
       currentPlayTime
     );
 
@@ -104,9 +138,23 @@ export const TrainingPanel: React.FC = () => {
     onProgress: (time) => {
       setCurrentTime(time);
       
-      const aria = useTrainingStore.getState().selectedAria;
-      if (aria && beatMatcherRef.current) {
-        const missed = beatMatcherRef.current.checkMissedBeats(aria, time);
+      const beats = useTrainingStore.getState().getActiveBeats();
+      if (beats.length === 0) return;
+
+      const fakeAria: Aria = {
+        id: 'virtual',
+        title: useTrainingStore.getState().getActiveTitle(),
+        opera: '',
+        role: '',
+        style: useTrainingStore.getState().getActiveStyle(),
+        totalDuration: useTrainingStore.getState().getActiveDuration(),
+        beats: beats,
+        sections: [],
+        difficulty: 'basic',
+      };
+
+      if (beatMatcherRef.current) {
+        const missed = beatMatcherRef.current.checkMissedBeats(fakeAria, time);
         missed.forEach(r => useTrainingStore.getState().addDetectionResult(r));
       }
     },
@@ -158,8 +206,32 @@ export const TrainingPanel: React.FC = () => {
     }
   };
 
+  const handleSequenceSelect = (sequenceId: string) => {
+    const sequence = allSequences.find(s => s.id === sequenceId);
+    if (sequence) {
+      loadSequence(sequence);
+      setShowSequenceDropdown(false);
+      beatMatcherRef.current?.reset();
+    }
+  };
+
+  const handleSaveSequence = (sequence: AriaSequence) => {
+    setCustomSequences(prev => {
+      const existing = prev.findIndex(s => s.id === sequence.id);
+      if (existing >= 0) {
+        const updated = [...prev];
+        updated[existing] = sequence;
+        return updated;
+      }
+      return [...prev, sequence];
+    });
+    loadSequence(sequence);
+    setShowSequenceEditor(false);
+  };
+
   const handleStart = async () => {
-    if (!selectedAria) return;
+    const beats = getActiveBeats();
+    if (beats.length === 0) return;
 
     if (microphoneActive && !microphone.isActive) {
       const started = await microphone.start(sensitivity);
@@ -170,8 +242,21 @@ export const TrainingPanel: React.FC = () => {
 
     beatMatcherRef.current?.reset();
     startTraining();
+
+    const virtualAria: Aria = {
+      id: 'virtual',
+      title: useTrainingStore.getState().getActiveTitle(),
+      opera: '',
+      role: '',
+      style: useTrainingStore.getState().getActiveStyle(),
+      totalDuration: useTrainingStore.getState().getActiveDuration(),
+      beats: beats,
+      sections: [],
+      difficulty: 'basic',
+    };
+
     beatPlayer.setMetronomeEnabled(metronomeActive);
-    beatPlayer.start(selectedAria, 0);
+    beatPlayer.start(virtualAria, 0);
   };
 
   const handlePause = () => {
@@ -228,6 +313,18 @@ export const TrainingPanel: React.FC = () => {
     microphone.setSensitivity(value);
   };
 
+  const switchMode = (mode: 'single' | 'sequence') => {
+    setPracticeMode(mode);
+    if (mode === 'sequence') {
+      if (!currentSequence && allSequences.length > 0) {
+        loadSequence(allSequences[0]);
+      }
+    } else {
+      loadSequence(null);
+    }
+    beatMatcherRef.current?.reset();
+  };
+
   useEffect(() => {
     return () => {
       if (feedbackTimeoutRef.current) {
@@ -238,6 +335,9 @@ export const TrainingPanel: React.FC = () => {
 
   const styleArias = getStyleArias(selectedStyle);
   const currentStyleInfo = BAN_STYLES[selectedStyle];
+
+  const currentDisplayStyle = getActiveStyle();
+  const currentDisplayStyleInfo = BAN_STYLES[currentDisplayStyle];
 
   const recentStats = {
     total: detectionResults.length,
@@ -271,13 +371,59 @@ export const TrainingPanel: React.FC = () => {
       if (showAriaDropdown && ariaDropdownRef.current && !ariaDropdownRef.current.contains(target)) {
         setShowAriaDropdown(false);
       }
+      if (showSequenceDropdown && sequenceDropdownRef.current && !sequenceDropdownRef.current.contains(target)) {
+        setShowSequenceDropdown(false);
+      }
     };
 
-    if (showStyleDropdown || showAriaDropdown) {
+    if (showStyleDropdown || showAriaDropdown || showSequenceDropdown) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showStyleDropdown, showAriaDropdown]);
+  }, [showStyleDropdown, showAriaDropdown, showSequenceDropdown]);
+
+  const currentSegmentsInfo = isSequenceMode && currentSequence ? (
+    <div className="space-y-2">
+      {currentSequence.segments.map((seg, i) => {
+        const aria = getAriaById(seg.ariaId);
+        if (!aria) return null;
+        const styleInfo = BAN_STYLES[aria.style];
+        const { segmentIndex } = getSegmentAtTime(currentTime);
+        const isActive = segmentIndex === i;
+        return (
+          <div
+            key={seg.id}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
+              isActive
+                ? 'bg-violet-500/20 border border-violet-500/30'
+                : 'bg-slate-700/30 border border-transparent'
+            }`}
+          >
+            <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold ${
+              isActive ? 'bg-violet-500 text-white' : 'bg-slate-600 text-slate-300'
+            }`}>
+              {i + 1}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-medium flex items-center gap-2">
+                <span className={`w-2 h-2 rounded-full ${
+                  styleInfo.category === 'xipi' ? 'bg-rose-500' :
+                  styleInfo.category === 'erhuang' ? 'bg-amber-500' : 'bg-blue-500'
+                }`} />
+                <span className={isActive ? 'text-violet-200' : 'text-white'}>{styleInfo.name}</span>
+                <span className="text-xs text-slate-500">· {aria.title}</span>
+              </div>
+              {i < currentSequence.segments.length - 1 && (
+                <div className="text-xs text-slate-500 mt-0.5">
+                  过渡: {seg.transitionStyle === 'gradual' ? '渐变' : seg.transitionStyle === 'natural' ? '自然' : '突变'} · {(seg.transitionDuration / 1000).toFixed(1)}s
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  ) : null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
@@ -301,102 +447,220 @@ export const TrainingPanel: React.FC = () => {
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
           <div className="lg:col-span-3 space-y-6">
             <div className="relative z-30 bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="inline-flex bg-slate-700/50 rounded-xl p-1">
+                  <button
+                    onClick={() => switchMode('single')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
+                      practiceMode === 'single'
+                        ? 'bg-amber-500 text-white shadow-lg'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    单板式练习
+                  </button>
+                  <button
+                    onClick={() => switchMode('sequence')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all flex items-center gap-2 ${
+                      practiceMode === 'sequence'
+                        ? 'bg-violet-500 text-white shadow-lg'
+                        : 'text-slate-400 hover:text-white'
+                    }`}
+                  >
+                    <Shuffle size={14} />
+                    板式序列练习
+                  </button>
+                </div>
+              </div>
+
               <div className="flex flex-wrap items-center gap-4">
-                <div className="relative" ref={styleDropdownRef}>
-                  <button
-                    onClick={() => {
-                      setShowStyleDropdown(!showStyleDropdown);
-                      setShowAriaDropdown(false);
-                    }}
-                    className="flex items-center gap-3 px-5 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600 transition-all min-w-48"
-                  >
-                    <div className={`w-3 h-3 rounded-full ${
-                      currentStyleInfo.category === 'xipi' ? 'bg-rose-500' :
-                      currentStyleInfo.category === 'erhuang' ? 'bg-amber-500' : 'bg-blue-500'
-                    }`} />
-                    <div className="text-left flex-1">
-                      <div className="text-sm text-slate-400">{currentStyleInfo.categoryName}</div>
-                      <div className="font-semibold">{currentStyleInfo.name}</div>
-                    </div>
-                    <ChevronDown size={18} className="text-slate-400" />
-                  </button>
+                {practiceMode === 'single' ? (
+                  <>
+                    <div className="relative" ref={styleDropdownRef}>
+                      <button
+                        onClick={() => {
+                          setShowStyleDropdown(!showStyleDropdown);
+                          setShowAriaDropdown(false);
+                        }}
+                        className="flex items-center gap-3 px-5 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600 transition-all min-w-48"
+                      >
+                        <div className={`w-3 h-3 rounded-full ${
+                          currentStyleInfo.category === 'xipi' ? 'bg-rose-500' :
+                          currentStyleInfo.category === 'erhuang' ? 'bg-amber-500' : 'bg-blue-500'
+                        }`} />
+                        <div className="text-left flex-1">
+                          <div className="text-sm text-slate-400">{currentStyleInfo.categoryName}</div>
+                          <div className="font-semibold">{currentStyleInfo.name}</div>
+                        </div>
+                        <ChevronDown size={18} className="text-slate-400" />
+                      </button>
 
-                  {showStyleDropdown && (
-                    <div className="absolute top-full left-0 mt-2 w-72 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden">
-                      {Object.entries(BAN_STYLES).map(([key, style]) => (
-                        <button
-                          key={key}
-                          onClick={() => handleStyleSelect(key as BanStyle)}
-                          className={`w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-700 transition-all ${
-                            selectedStyle === key ? 'bg-slate-700/70' : ''
-                          }`}
-                        >
-                          <div className={`w-3 h-3 rounded-full ${
-                            style.category === 'xipi' ? 'bg-rose-500' :
-                            style.category === 'erhuang' ? 'bg-amber-500' : 'bg-blue-500'
-                          }`} />
-                          <div className="text-left flex-1">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium">{style.name}</span>
-                              <span className="text-xs text-slate-500">{style.categoryName}</span>
-                            </div>
-                            <div className="text-xs text-slate-400 mt-0.5">
-                              {style.bpm} BPM · {style.beatsPerMeasure}拍
-                            </div>
-                          </div>
-                        </button>
-                      ))}
+                      {showStyleDropdown && (
+                        <div className="absolute top-full left-0 mt-2 w-72 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden">
+                          {Object.entries(BAN_STYLES).map(([key, style]) => (
+                            <button
+                              key={key}
+                              onClick={() => handleStyleSelect(key as BanStyle)}
+                              className={`w-full px-4 py-3 flex items-center gap-3 hover:bg-slate-700 transition-all ${
+                                selectedStyle === key ? 'bg-slate-700/70' : ''
+                              }`}
+                            >
+                              <div className={`w-3 h-3 rounded-full ${
+                                style.category === 'xipi' ? 'bg-rose-500' :
+                                style.category === 'erhuang' ? 'bg-amber-500' : 'bg-blue-500'
+                              }`} />
+                              <div className="text-left flex-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium">{style.name}</span>
+                                  <span className="text-xs text-slate-500">{style.categoryName}</span>
+                                </div>
+                                <div className="text-xs text-slate-400 mt-0.5">
+                                  {style.bpm} BPM · {style.beatsPerMeasure}拍
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
 
-                <div className="relative" ref={ariaDropdownRef}>
-                  <button
-                    onClick={() => {
-                      setShowAriaDropdown(!showAriaDropdown);
-                      setShowStyleDropdown(false);
-                    }}
-                    disabled={styleArias.length === 0}
-                    className="flex items-center gap-3 px-5 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600 transition-all min-w-80 disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <div className="text-left flex-1">
-                      <div className="text-sm text-slate-400">唱段选择</div>
-                      <div className="font-semibold truncate max-w-56">
-                        {selectedAria?.title || '请选择唱段'}
-                      </div>
-                    </div>
-                    <ChevronDown size={18} className="text-slate-400" />
-                  </button>
+                    <div className="relative" ref={ariaDropdownRef}>
+                      <button
+                        onClick={() => {
+                          setShowAriaDropdown(!showAriaDropdown);
+                          setShowStyleDropdown(false);
+                        }}
+                        disabled={styleArias.length === 0}
+                        className="flex items-center gap-3 px-5 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600 transition-all min-w-80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <div className="text-left flex-1">
+                          <div className="text-sm text-slate-400">唱段选择</div>
+                          <div className="font-semibold truncate max-w-56">
+                            {selectedAria?.title || '请选择唱段'}
+                          </div>
+                        </div>
+                        <ChevronDown size={18} className="text-slate-400" />
+                      </button>
 
-                  {showAriaDropdown && styleArias.length > 0 && (
-                    <div className="absolute top-full left-0 mt-2 w-96 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden max-h-96 overflow-y-auto">
-                      {styleArias.map((aria) => (
-                        <button
-                          key={aria.id}
-                          onClick={() => handleAriaSelect(aria.id)}
-                          className={`w-full px-4 py-3 flex items-center gap-4 hover:bg-slate-700 transition-all ${
-                            selectedAria?.id === aria.id ? 'bg-slate-700/70' : ''
-                          }`}
-                        >
-                          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-                            aria.difficulty === 'basic' ? 'bg-green-500/20 text-green-400' :
-                            aria.difficulty === 'intermediate' ? 'bg-yellow-500/20 text-yellow-400' :
-                            'bg-red-500/20 text-red-400'
-                          }`}>
-                            {aria.difficulty === 'basic' ? '初' :
-                             aria.difficulty === 'intermediate' ? '中' : '难'}
-                          </div>
-                          <div className="text-left flex-1 min-w-0">
-                            <div className="font-medium truncate">{aria.title}</div>
-                            <div className="text-xs text-slate-400 mt-0.5">
-                              {aria.opera} · {aria.role} · {(aria.totalDuration / 1000).toFixed(0)}秒
-                            </div>
-                          </div>
-                        </button>
-                      ))}
+                      {showAriaDropdown && styleArias.length > 0 && (
+                        <div className="absolute top-full left-0 mt-2 w-96 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden max-h-96 overflow-y-auto">
+                          {styleArias.map((aria) => (
+                            <button
+                              key={aria.id}
+                              onClick={() => handleAriaSelect(aria.id)}
+                              className={`w-full px-4 py-3 flex items-center gap-4 hover:bg-slate-700 transition-all ${
+                                selectedAria?.id === aria.id ? 'bg-slate-700/70' : ''
+                              }`}
+                            >
+                              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                                aria.difficulty === 'basic' ? 'bg-green-500/20 text-green-400' :
+                                aria.difficulty === 'intermediate' ? 'bg-yellow-500/20 text-yellow-400' :
+                                'bg-red-500/20 text-red-400'
+                              }`}>
+                                {aria.difficulty === 'basic' ? '初' :
+                                 aria.difficulty === 'intermediate' ? '中' : '难'}
+                              </div>
+                              <div className="text-left flex-1 min-w-0">
+                                <div className="font-medium truncate">{aria.title}</div>
+                                <div className="text-xs text-slate-400 mt-0.5">
+                                  {aria.opera} · {aria.role} · {(aria.totalDuration / 1000).toFixed(0)}秒
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="relative" ref={sequenceDropdownRef}>
+                      <button
+                        onClick={() => {
+                          setShowSequenceDropdown(!showSequenceDropdown);
+                        }}
+                        disabled={allSequences.length === 0}
+                        className="flex items-center gap-3 px-5 py-3 bg-violet-500/10 hover:bg-violet-500/20 rounded-xl border border-violet-500/30 transition-all min-w-80 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        <Shuffle size={18} className="text-violet-400" />
+                        <div className="text-left flex-1">
+                          <div className="text-sm text-violet-400">板式序列</div>
+                          <div className="font-semibold truncate max-w-56">
+                            {currentSequence?.title || '请选择序列'}
+                          </div>
+                        </div>
+                        <ChevronDown size={18} className="text-slate-400" />
+                      </button>
+
+                      {showSequenceDropdown && allSequences.length > 0 && (
+                        <div className="absolute top-full left-0 mt-2 w-[28rem] bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden max-h-96 overflow-y-auto">
+                          <div className="px-4 py-2 border-b border-slate-700 text-xs text-slate-400">
+                            预设序列
+                          </div>
+                          {ARIA_SEQUENCES.map((seq) => (
+                            <button
+                              key={seq.id}
+                              onClick={() => handleSequenceSelect(seq.id)}
+                              className={`w-full px-4 py-3 flex items-center gap-4 hover:bg-slate-700 transition-all text-left ${
+                                currentSequence?.id === seq.id ? 'bg-slate-700/70' : ''
+                              }`}
+                            >
+                              <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                                seq.difficulty === 'basic' ? 'bg-green-500/20 text-green-400' :
+                                seq.difficulty === 'intermediate' ? 'bg-yellow-500/20 text-yellow-400' :
+                                'bg-red-500/20 text-red-400'
+                              }`}>
+                                {seq.difficulty === 'basic' ? '初' :
+                                 seq.difficulty === 'intermediate' ? '中' : '难'}
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium truncate">{seq.title}</div>
+                                <div className="text-xs text-slate-400 mt-0.5">
+                                  {seq.segments.length} 段 · {seq.segments.length - 1} 次过渡
+                                </div>
+                                {seq.description && (
+                                  <div className="text-xs text-slate-500 mt-1 truncate">{seq.description}</div>
+                                )}
+                              </div>
+                            </button>
+                          ))}
+                          {customSequences.length > 0 && (
+                            <div className="px-4 py-2 border-t border-slate-700 border-b border-slate-700 text-xs text-slate-400">
+                              自定义序列
+                            </div>
+                          )}
+                          {customSequences.map((seq) => (
+                            <button
+                              key={seq.id}
+                              onClick={() => handleSequenceSelect(seq.id)}
+                              className={`w-full px-4 py-3 flex items-center gap-4 hover:bg-slate-700 transition-all text-left ${
+                                currentSequence?.id === seq.id ? 'bg-slate-700/70' : ''
+                              }`}
+                            >
+                              <div className="w-10 h-10 rounded-lg flex items-center justify-center bg-violet-500/20 text-violet-400">
+                                <Edit3 size={16} />
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="font-medium truncate">{seq.title}</div>
+                                <div className="text-xs text-slate-400 mt-0.5">
+                                  {seq.segments.length} 段 · {seq.segments.length - 1} 次过渡 · 自定义
+                                </div>
+                              </div>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => setShowSequenceEditor(true)}
+                      className="flex items-center gap-2 px-5 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600 transition-all"
+                    >
+                      <Plus size={18} />
+                      {currentSequence ? '编辑序列' : '创建序列'}
+                    </button>
+                  </>
+                )}
 
                 <div className="flex-1" />
 
@@ -405,6 +669,7 @@ export const TrainingPanel: React.FC = () => {
                     setShowSettings(!showSettings);
                     setShowStyleDropdown(false);
                     setShowAriaDropdown(false);
+                    setShowSequenceDropdown(false);
                   }}
                   className={`p-3 rounded-xl border transition-all ${
                     showSettings
@@ -505,9 +770,24 @@ export const TrainingPanel: React.FC = () => {
                   </div>
                 </div>
               )}
+
+              <TransitionWarning />
             </div>
 
-            {selectedAria && (
+            {isSequenceMode && currentSequence && currentSegmentsInfo && trainingState !== 'finished' && (
+              <div className="relative z-0 bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-violet-500/20">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Shuffle size={18} className="text-violet-400" />
+                    序列片段
+                  </h3>
+                  <span className="text-sm text-slate-400">{currentSequence.segments.length} 个片段</span>
+                </div>
+                {currentSegmentsInfo}
+              </div>
+            )}
+
+            {!isSequenceMode && selectedAria && (
               <div className="relative z-0 bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-semibold">段落信息</h3>
@@ -555,7 +835,7 @@ export const TrainingPanel: React.FC = () => {
                 {trainingState === 'idle' || trainingState === 'finished' ? (
                   <button
                     onClick={handleStart}
-                    disabled={!selectedAria}
+                    disabled={isSequenceMode ? !currentSequence : !selectedAria}
                     className="group flex items-center gap-3 px-8 py-4 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-600 hover:to-teal-600 disabled:from-slate-600 disabled:to-slate-600 disabled:cursor-not-allowed rounded-xl font-bold text-lg shadow-lg shadow-emerald-500/20 transition-all transform hover:scale-105 disabled:hover:scale-100"
                   >
                     <Play size={24} fill="currentColor" className="group-hover:scale-110 transition-transform" />
@@ -614,7 +894,7 @@ export const TrainingPanel: React.FC = () => {
                 </div>
               )}
 
-              {selectedAria && trainingState !== 'finished' && (
+              {(isSequenceMode ? currentSequence : selectedAria) && trainingState !== 'finished' && (
                 <button
                   onClick={handleFinish}
                   disabled={trainingState === 'idle'}
@@ -685,19 +965,19 @@ export const TrainingPanel: React.FC = () => {
             <div className="bg-gradient-to-br from-amber-500/10 to-rose-500/10 rounded-2xl p-6 border border-amber-500/20">
               <h3 className="text-sm font-semibold text-amber-300 mb-3 flex items-center gap-2">
                 <Info size={16} />
-                板式说明
+                {isSequenceMode ? '当前序列板式' : '板式说明'}
               </h3>
               <p className="text-sm text-slate-300 leading-relaxed">
-                {currentStyleInfo.description}
+                {currentDisplayStyleInfo.description}
               </p>
               <div className="mt-4 grid grid-cols-2 gap-3 text-xs">
                 <div className="bg-slate-800/50 rounded-lg p-3">
                   <div className="text-slate-500">速度</div>
-                  <div className="text-white font-semibold">{currentStyleInfo.bpm} BPM</div>
+                  <div className="text-white font-semibold">{currentDisplayStyleInfo.bpm} BPM</div>
                 </div>
                 <div className="bg-slate-800/50 rounded-lg p-3">
                   <div className="text-slate-500">每小节</div>
-                  <div className="text-white font-semibold">{currentStyleInfo.beatsPerMeasure} 拍</div>
+                  <div className="text-white font-semibold">{currentDisplayStyleInfo.beatsPerMeasure} 拍</div>
                 </div>
               </div>
             </div>
@@ -706,6 +986,13 @@ export const TrainingPanel: React.FC = () => {
       </div>
 
       {sessionStats && <AssessmentReport />}
+      {showSequenceEditor && (
+        <SequenceEditor
+          onSave={handleSaveSequence}
+          onClose={() => setShowSequenceEditor(false)}
+          initialSequence={currentSequence}
+        />
+      )}
     </div>
   );
 };

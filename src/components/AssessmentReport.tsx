@@ -9,21 +9,29 @@ import {
   CheckCircle2,
   XCircle,
   MinusCircle,
-  ChevronRight
+  ChevronRight,
+  Shuffle,
+  Gauge,
+  ArrowRight
 } from 'lucide-react';
 import { useTrainingStore } from '@/store/trainingStore';
 import { BAN_STYLES } from '@/data/arias';
 import { getAccuracyColor, getAccuracyLabel, formatDeviation } from '@/hooks/useBeatMatcher';
-import type { DetectionResult } from '@/types';
+import type { DetectionResult, SequenceSessionStats } from '@/types';
 
 export const AssessmentReport: React.FC = () => {
-  const { sessionStats, selectedAria, resetSession } = useTrainingStore();
+  const { sessionStats, selectedAria, resetSession, isSequenceMode, currentSequence } = useTrainingStore();
+
+  const isSequenceSession = isSequenceMode && 'transitions' in (sessionStats || {});
+  const seqStats = isSequenceSession ? (sessionStats as SequenceSessionStats) : null;
 
   const stats = useMemo(() => {
     if (!sessionStats) return null;
 
     const results = sessionStats.results;
-    const totalBeats = selectedAria?.beats.length || 0;
+    const totalBeats = isSequenceMode 
+      ? useTrainingStore.getState().sequenceBeats.length
+      : selectedAria?.beats.length || 0;
     
     const perfectCount = results.filter(r => r.accuracy === 'perfect').length;
     const goodCount = results.filter(r => r.accuracy === 'good').length;
@@ -55,7 +63,7 @@ export const AssessmentReport: React.FC = () => {
       earlyCount,
       maxDeviation,
     };
-  }, [sessionStats, selectedAria]);
+  }, [sessionStats, selectedAria, isSequenceMode]);
 
   const accuracyTrend = useMemo(() => {
     if (!sessionStats) return [];
@@ -96,18 +104,35 @@ export const AssessmentReport: React.FC = () => {
     return <XCircle size={14} className="text-red-500" />;
   };
 
+  const getScoreColor = (score: number) => {
+    if (score >= 85) return '#22c55e';
+    if (score >= 70) return '#84cc16';
+    if (score >= 55) return '#eab308';
+    if (score >= 40) return '#f97316';
+    return '#ef4444';
+  };
+
   return (
     <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
       <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-3xl max-w-4xl w-full max-h-[90vh] overflow-y-auto shadow-2xl border border-slate-700">
         <div className="p-8">
           <div className="text-center mb-8">
             <div className="inline-flex items-center gap-3 mb-4">
-              <div className="p-3 bg-gradient-to-br from-amber-500 to-rose-500 rounded-2xl">
-                <Music2 size={32} className="text-white" />
+              <div className={`p-3 rounded-2xl ${
+                isSequenceMode
+                  ? 'bg-gradient-to-br from-violet-500 to-indigo-500'
+                  : 'bg-gradient-to-br from-amber-500 to-rose-500'
+              }`}>
+                {isSequenceMode ? <Shuffle size={32} className="text-white" /> : <Music2 size={32} className="text-white" />}
               </div>
               <div className="text-left">
                 <h2 className="text-3xl font-bold text-white">{sessionStats.ariaTitle}</h2>
-                <p className="text-slate-400">{styleInfo.categoryName} · {styleInfo.name}</p>
+                <p className="text-slate-400">
+                  {isSequenceMode && currentSequence 
+                    ? `板式序列练习 · ${currentSequence.segments.length} 段 · ${seqStats?.transitions.length || 0} 次过渡`
+                    : `${styleInfo.categoryName} · ${styleInfo.name}`
+                  }
+                </p>
               </div>
             </div>
           </div>
@@ -155,6 +180,147 @@ export const AssessmentReport: React.FC = () => {
               <div className="text-slate-400 text-sm">最大偏差</div>
             </div>
           </div>
+
+          {seqStats && seqStats.transitions.length > 0 && (
+            <div className="bg-gradient-to-br from-violet-900/30 to-indigo-900/30 rounded-2xl p-6 mb-6 border border-violet-500/30">
+              <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">
+                <Shuffle size={20} className="text-violet-400" />
+                板式过渡评估
+                <span className="ml-auto text-sm font-normal text-violet-300">
+                  平均分: 
+                  <span className="font-bold ml-1" style={{ color: getScoreColor(seqStats.transitionAverageScore) }}>
+                    {seqStats.transitionAverageScore.toFixed(1)}
+                  </span>
+                </span>
+              </h3>
+
+              <div className="space-y-4">
+                {seqStats.transitions.map((trans, i) => {
+                  const fromInfo = BAN_STYLES[trans.fromStyle];
+                  const toInfo = BAN_STYLES[trans.toStyle];
+                  
+                  return (
+                    <div
+                      key={i}
+                      className="bg-slate-800/50 rounded-xl p-4 border border-slate-700"
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className={`px-2 py-1 rounded-lg text-sm font-medium ${
+                            fromInfo.category === 'xipi' ? 'bg-rose-500/20 text-rose-300' :
+                            fromInfo.category === 'erhuang' ? 'bg-amber-500/20 text-amber-300' :
+                            'bg-blue-500/20 text-blue-300'
+                          }`}>
+                            {fromInfo.name}
+                          </span>
+                          <ArrowRight size={16} className="text-slate-500" />
+                          <span className={`px-2 py-1 rounded-lg text-sm font-medium ${
+                            toInfo.category === 'xipi' ? 'bg-rose-500/20 text-rose-300' :
+                            toInfo.category === 'erhuang' ? 'bg-amber-500/20 text-amber-300' :
+                            'bg-blue-500/20 text-blue-300'
+                          }`}>
+                            {toInfo.name}
+                          </span>
+                        </div>
+                        <div
+                          className="text-2xl font-bold"
+                          style={{ color: getScoreColor(trans.totalScore) }}
+                        >
+                          {trans.totalScore.toFixed(0)}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="bg-slate-900/50 rounded-lg p-3">
+                          <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
+                            <Gauge size={12} />
+                            过渡平滑度
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{ 
+                                  width: `${trans.smoothness * 100}%`,
+                                  backgroundColor: getScoreColor(trans.smoothness * 100)
+                                }}
+                              />
+                            </div>
+                            <span
+                              className="text-sm font-mono font-bold"
+                              style={{ color: getScoreColor(trans.smoothness * 100) }}
+                            >
+                              {(trans.smoothness * 100).toFixed(0)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900/50 rounded-lg p-3">
+                          <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
+                            <Target size={12} />
+                            速度控制
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{ 
+                                  width: `${trans.speedControl * 100}%`,
+                                  backgroundColor: getScoreColor(trans.speedControl * 100)
+                                }}
+                              />
+                            </div>
+                            <span
+                              className="text-sm font-mono font-bold"
+                              style={{ color: getScoreColor(trans.speedControl * 100) }}
+                            >
+                              {(trans.speedControl * 100).toFixed(0)}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="bg-slate-900/50 rounded-lg p-3">
+                          <div className="flex items-center gap-1 text-xs text-slate-400 mb-1">
+                            <CheckCircle2 size={12} />
+                            节拍准确性
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <div className="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
+                              <div
+                                className="h-full rounded-full"
+                                style={{ 
+                                  width: `${trans.beatAccuracy * 100}%`,
+                                  backgroundColor: getScoreColor(trans.beatAccuracy * 100)
+                                }}
+                              />
+                            </div>
+                            <span
+                              className="text-sm font-mono font-bold"
+                              style={{ color: getScoreColor(trans.beatAccuracy * 100) }}
+                            >
+                              {(trans.beatAccuracy * 100).toFixed(0)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-500">
+                        <div>
+                          速度变化率: <span className="text-slate-300 font-mono">{(trans.speedChangeRate * 100).toFixed(1)}%</span>
+                        </div>
+                        <div>
+                          过渡前稳定度: <span className="text-slate-300 font-mono">{(trans.stabilityBefore * 100).toFixed(0)}%</span>
+                        </div>
+                        <div>
+                          过渡后稳定度: <span className="text-slate-300 font-mono">{(trans.stabilityAfter * 100).toFixed(0)}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="bg-slate-800/30 rounded-2xl p-6 mb-6 border border-slate-700">
             <h3 className="text-lg font-semibold text-white mb-4 flex items-center gap-2">

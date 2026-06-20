@@ -1,4 +1,4 @@
-import type { BanStyleInfo, Aria, BanStyle, BeatPoint } from '@/types';
+import type { BanStyleInfo, Aria, BanStyle, BeatPoint, AriaSequence, SequenceSegment, TransitionPoint } from '@/types';
 
 export const BAN_STYLES: Record<BanStyle, BanStyleInfo> = {
   yuanban: {
@@ -465,4 +465,223 @@ export const getStyleArias = (style: BanStyle): Aria[] => {
 
 export const getAriaById = (id: string): Aria | undefined => {
   return ARIAS.find(a => a.id === id);
+};
+
+function createSequenceSegment(
+  ariaId: string,
+  startSec: number,
+  endSec: number,
+  transitionStyle: 'gradual' | 'abrupt' | 'natural' = 'natural',
+  transitionDurationSec: number = 2
+): SequenceSegment {
+  return {
+    id: `${ariaId}-${startSec}-${endSec}`,
+    ariaId,
+    startTime: startSec * 1000,
+    endTime: endSec * 1000,
+    transitionStyle,
+    transitionDuration: transitionDurationSec * 1000,
+  };
+}
+
+export const ARIA_SEQUENCES: AriaSequence[] = [
+  {
+    id: 'erhuang-yuanban-manban',
+    title: '二黄原板转慢板',
+    description: '练习二黄原板到慢板的舒缓过渡，考验节奏放慢的控制力',
+    difficulty: 'intermediate',
+    segments: [
+      createSequenceSegment('taiwaizhengzong-yuanban', 0, 20, 'gradual', 3),
+      createSequenceSegment('suolinang-manban', 8, 30, 'natural', 2),
+    ],
+    createdAt: Date.now(),
+  },
+  {
+    id: 'xipi-liushui-kuaiban',
+    title: '西皮流水转快板',
+    description: '练习西皮流水到快板的加速过渡，考验节奏渐快的稳定性',
+    difficulty: 'advanced',
+    segments: [
+      createSequenceSegment('yutangchun-liushui', 0, 20, 'gradual', 2),
+      createSequenceSegment('muguiying-kuaiban', 0, 20, 'natural', 2),
+    ],
+    createdAt: Date.now(),
+  },
+  {
+    id: 'xipi-erliu-liushui-kuaiban',
+    title: '西皮二六→流水→快板',
+    description: '连续板式转换练习，从二六到流水再到快板，逐级加速',
+    difficulty: 'advanced',
+    segments: [
+      createSequenceSegment('kongchengji-erliu', 8, 25, 'gradual', 2),
+      createSequenceSegment('hongniang-liushui', 0, 20, 'gradual', 2),
+      createSequenceSegment('dengdian-kuaiban', 0, 20, 'natural', 2),
+    ],
+    createdAt: Date.now(),
+  },
+  {
+    id: 'xipi-manban-yuanban',
+    title: '西皮慢板转原板',
+    description: '从慢板到原板的自然过渡，练习节奏适度加快',
+    difficulty: 'basic',
+    segments: [
+      createSequenceSegment('silangtanmu-manban', 8, 28, 'natural', 3),
+      createSequenceSegment('zhameian-yuanban', 6, 26, 'natural', 2),
+    ],
+    createdAt: Date.now(),
+  },
+  {
+    id: 'erhuang-kuaiyuanban-yuanban',
+    title: '二黄快原板转原板',
+    description: '练习从快原板放慢到原板，考验减速时的稳定性',
+    difficulty: 'intermediate',
+    segments: [
+      createSequenceSegment('wenzhaoguan-kuaiyuanban', 8, 25, 'gradual', 3),
+      createSequenceSegment('zhuofangcao-yuanban', 8, 30, 'natural', 2),
+    ],
+    createdAt: Date.now(),
+  },
+  {
+    id: 'comprehensive-transition',
+    title: '综合板式转换练习',
+    description: '包含慢板、原板、流水、快板多种板式的综合练习',
+    difficulty: 'advanced',
+    segments: [
+      createSequenceSegment('lijinghua-manban', 10, 28, 'gradual', 3),
+      createSequenceSegment('fenhewan-erliu', 8, 25, 'gradual', 2),
+      createSequenceSegment('wujiaopo-liushui', 6, 24, 'gradual', 2),
+      createSequenceSegment('honghaier-kuaiban', 0, 20, 'natural', 2),
+    ],
+    createdAt: Date.now(),
+  },
+];
+
+export const buildSequenceBeats = (sequence: AriaSequence): BeatPoint[] => {
+  const beats: BeatPoint[] = [];
+  let offsetTime = 0;
+  let globalBeatIndex = 0;
+
+  sequence.segments.forEach((segment, segIndex) => {
+    const aria = getAriaById(segment.ariaId);
+    if (!aria) return;
+
+    const segmentBeats = aria.beats.filter(
+      b => b.time >= segment.startTime && b.time < segment.endTime
+    );
+
+    const isLastSegment = segIndex === sequence.segments.length - 1;
+    const transitionMs = isLastSegment ? 0 : segment.transitionDuration;
+    const segmentDuration = segment.endTime - segment.startTime;
+
+    if (!isLastSegment && transitionMs > 0) {
+      const nextSegment = sequence.segments[segIndex + 1];
+      const nextAria = getAriaById(nextSegment.ariaId);
+      const fromStyle = BAN_STYLES[aria.style];
+      const toStyle = nextAria ? BAN_STYLES[nextAria.style] : fromStyle;
+      
+      const fromInterval = 60000 / fromStyle.bpm;
+      const toInterval = 60000 / toStyle.bpm;
+      const transitionSteps = Math.max(4, Math.floor(transitionMs / Math.min(fromInterval, toInterval)));
+
+      for (let i = 0; i < transitionSteps; i++) {
+        const progress = (i + 1) / (transitionSteps + 1);
+        const easedProgress = segment.transitionStyle === 'gradual'
+          ? progress * progress * (3 - 2 * progress)
+          : progress;
+        const currentInterval = fromInterval + (toInterval - fromInterval) * easedProgress;
+        const beatTime = offsetTime + segmentDuration + i * currentInterval + currentInterval;
+
+        beats.push({
+          time: beatTime,
+          type: i % fromStyle.beatsPerMeasure === 0 ? 'ban' : 'yan',
+          index: globalBeatIndex++,
+        });
+      }
+    }
+
+    segmentBeats.forEach(beat => {
+      beats.push({
+        time: offsetTime + (beat.time - segment.startTime),
+        type: beat.type,
+        index: globalBeatIndex++,
+      });
+    });
+
+    offsetTime += segmentDuration + transitionMs;
+  });
+
+  return beats.sort((a, b) => a.time - b.time);
+};
+
+export const getSequenceDuration = (sequence: AriaSequence): number => {
+  let total = 0;
+  sequence.segments.forEach((segment, index) => {
+    total += segment.endTime - segment.startTime;
+    if (index < sequence.segments.length - 1) {
+      total += segment.transitionDuration;
+    }
+  });
+  return total;
+};
+
+export const getTransitionPoints = (sequence: AriaSequence): TransitionPoint[] => {
+  const points: TransitionPoint[] = [];
+  let offsetTime = 0;
+
+  for (let i = 0; i < sequence.segments.length - 1; i++) {
+    const currentSegment = sequence.segments[i];
+    const nextSegment = sequence.segments[i + 1];
+    const currentAria = getAriaById(currentSegment.ariaId);
+    const nextAria = getAriaById(nextSegment.ariaId);
+
+    if (currentAria && nextAria) {
+      const segmentDuration = currentSegment.endTime - currentSegment.startTime;
+      points.push({
+        time: offsetTime + segmentDuration,
+        fromStyle: currentAria.style,
+        toStyle: nextAria.style,
+        fromSegmentId: currentSegment.id,
+        toSegmentId: nextSegment.id,
+        transitionStyle: currentSegment.transitionStyle,
+        transitionDuration: currentSegment.transitionDuration,
+      });
+    }
+
+    offsetTime += (currentSegment.endTime - currentSegment.startTime) + currentSegment.transitionDuration;
+  }
+
+  return points;
+};
+
+export const getSegmentAtTime = (sequence: AriaSequence, time: number): { segment: SequenceSegment | null; segmentIndex: number; localTime: number } => {
+  let offsetTime = 0;
+
+  for (let i = 0; i < sequence.segments.length; i++) {
+    const segment = sequence.segments[i];
+    const segmentDuration = segment.endTime - segment.startTime;
+    const isLast = i === sequence.segments.length - 1;
+    const endOffset = offsetTime + segmentDuration + (isLast ? 0 : segment.transitionDuration);
+
+    if (time < endOffset) {
+      const localTime = Math.max(0, Math.min(segmentDuration, time - offsetTime)) + segment.startTime;
+      return { segment, segmentIndex: i, localTime };
+    }
+
+    offsetTime = endOffset;
+  }
+
+  const lastSegment = sequence.segments[sequence.segments.length - 1];
+  return {
+    segment: lastSegment || null,
+    segmentIndex: sequence.segments.length - 1,
+    localTime: lastSegment ? lastSegment.endTime : 0,
+  };
+};
+
+export const getSequenceById = (id: string): AriaSequence | undefined => {
+  return ARIA_SEQUENCES.find(s => s.id === id);
+};
+
+export const getSequencesByDifficulty = (difficulty: AriaSequence['difficulty']): AriaSequence[] => {
+  return ARIA_SEQUENCES.filter(s => s.difficulty === difficulty);
 };
