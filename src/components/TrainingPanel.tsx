@@ -1,4 +1,5 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
+import type { RefObject } from 'react';
 import {
   Play,
   Pause,
@@ -64,6 +65,9 @@ export const TrainingPanel: React.FC = () => {
 
   const beatMatcherRef = useRef<ReturnType<typeof useBeatMatcher> | null>(null);
   const feedbackTimeoutRef = useRef<number | null>(null);
+  const styleDropdownRef = useRef<HTMLDivElement>(null);
+  const ariaDropdownRef = useRef<HTMLDivElement>(null);
+  const settingsContainerRef = useRef<HTMLDivElement>(null);
 
   const { matchBeat, checkMissedBeats, reset: resetMatcher } = useBeatMatcher();
   beatMatcherRef.current = { matchBeat, checkMissedBeats, reset: resetMatcher };
@@ -257,6 +261,24 @@ export const TrainingPanel: React.FC = () => {
     }
   };
 
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      
+      if (showStyleDropdown && styleDropdownRef.current && !styleDropdownRef.current.contains(target)) {
+        setShowStyleDropdown(false);
+      }
+      if (showAriaDropdown && ariaDropdownRef.current && !ariaDropdownRef.current.contains(target)) {
+        setShowAriaDropdown(false);
+      }
+    };
+
+    if (showStyleDropdown || showAriaDropdown) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showStyleDropdown, showAriaDropdown]);
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-white">
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-amber-900/10 via-transparent to-transparent pointer-events-none" />
@@ -278,11 +300,14 @@ export const TrainingPanel: React.FC = () => {
 
         <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 mb-8">
           <div className="lg:col-span-3 space-y-6">
-            <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
+            <div className="relative z-30 bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
               <div className="flex flex-wrap items-center gap-4">
-                <div className="relative">
+                <div className="relative" ref={styleDropdownRef}>
                   <button
-                    onClick={() => setShowStyleDropdown(!showStyleDropdown)}
+                    onClick={() => {
+                      setShowStyleDropdown(!showStyleDropdown);
+                      setShowAriaDropdown(false);
+                    }}
                     className="flex items-center gap-3 px-5 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600 transition-all min-w-48"
                   >
                     <div className={`w-3 h-3 rounded-full ${
@@ -297,7 +322,7 @@ export const TrainingPanel: React.FC = () => {
                   </button>
 
                   {showStyleDropdown && (
-                    <div className="absolute top-full left-0 mt-2 w-72 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-20 overflow-hidden">
+                    <div className="absolute top-full left-0 mt-2 w-72 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden">
                       {Object.entries(BAN_STYLES).map(([key, style]) => (
                         <button
                           key={key}
@@ -325,9 +350,12 @@ export const TrainingPanel: React.FC = () => {
                   )}
                 </div>
 
-                <div className="relative">
+                <div className="relative" ref={ariaDropdownRef}>
                   <button
-                    onClick={() => setShowAriaDropdown(!showAriaDropdown)}
+                    onClick={() => {
+                      setShowAriaDropdown(!showAriaDropdown);
+                      setShowStyleDropdown(false);
+                    }}
                     disabled={styleArias.length === 0}
                     className="flex items-center gap-3 px-5 py-3 bg-slate-700/50 hover:bg-slate-700 rounded-xl border border-slate-600 transition-all min-w-80 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
@@ -341,7 +369,7 @@ export const TrainingPanel: React.FC = () => {
                   </button>
 
                   {showAriaDropdown && styleArias.length > 0 && (
-                    <div className="absolute top-full left-0 mt-2 w-96 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-20 overflow-hidden max-h-96 overflow-y-auto">
+                    <div className="absolute top-full left-0 mt-2 w-96 bg-slate-800 border border-slate-600 rounded-xl shadow-2xl z-50 overflow-hidden max-h-96 overflow-y-auto">
                       {styleArias.map((aria) => (
                         <button
                           key={aria.id}
@@ -373,7 +401,11 @@ export const TrainingPanel: React.FC = () => {
                 <div className="flex-1" />
 
                 <button
-                  onClick={() => setShowSettings(!showSettings)}
+                  onClick={() => {
+                    setShowSettings(!showSettings);
+                    setShowStyleDropdown(false);
+                    setShowAriaDropdown(false);
+                  }}
                   className={`p-3 rounded-xl border transition-all ${
                     showSettings
                       ? 'bg-amber-500/20 border-amber-500/50 text-amber-400'
@@ -463,7 +495,7 @@ export const TrainingPanel: React.FC = () => {
               )}
             </div>
 
-            <div className="relative">
+            <div className="relative z-0">
               <BeatTimeline width={900} height={220} />
 
               {instantFeedback?.show && (
@@ -476,7 +508,7 @@ export const TrainingPanel: React.FC = () => {
             </div>
 
             {selectedAria && (
-              <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
+              <div className="relative z-0 bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-semibold">段落信息</h3>
                   <span className="text-sm text-slate-400">{selectedAria.sections.length} 个段落</span>
@@ -517,7 +549,7 @@ export const TrainingPanel: React.FC = () => {
             )}
           </div>
 
-          <div className="space-y-6">
+          <div className="space-y-6 relative z-10">
             <div className="bg-slate-800/50 backdrop-blur-sm rounded-2xl p-6 border border-slate-700/50">
               <div className="flex justify-center gap-4 mb-6">
                 {trainingState === 'idle' || trainingState === 'finished' ? (

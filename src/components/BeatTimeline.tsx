@@ -358,7 +358,7 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
     return (
       <div
         ref={containerRef}
-        className="relative bg-gradient-to-b from-slate-900 to-slate-800 rounded-2xl flex items-center justify-center"
+        className="relative z-0 bg-gradient-to-b from-slate-900 to-slate-800 rounded-2xl flex items-center justify-center"
         style={{ width, height }}
       >
         <p className="text-slate-400 text-lg">请选择一个唱段开始练习</p>
@@ -371,7 +371,7 @@ export const BeatTimeline: React.FC<BeatTimelineProps> = ({
   return (
     <div
       ref={containerRef}
-      className="relative bg-gradient-to-b from-slate-900 to-slate-800 rounded-2xl overflow-hidden shadow-2xl border border-slate-700"
+      className="relative z-0 bg-gradient-to-b from-slate-900 to-slate-800 rounded-2xl overflow-hidden shadow-2xl border border-slate-700"
       style={{ width, height }}
     >
       <div className="absolute top-3 left-4 flex items-center gap-4">
